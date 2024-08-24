@@ -1,0 +1,133 @@
+(©) QuantArtic 2024 License
+
+
+from pyrogram import filters
+from bot import Bot as app
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from datetime import datetime, timedelta
+import pytz
+import requests
+
+# Function to get the SubsPlease schedule for a specific day
+def get_subsplease_schedule(date_param):
+    api_url = f'https://subsplease.org/api/?f=schedule&h=true&tz=$&date={date_param}'
+
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching SubsPlease schedule: {e}")
+        return None
+
+# Function to convert UTC time to Indian Standard Time (IST)
+def convert_utc_to_ist(utc_time_str):
+    utc_time = datetime.strptime(utc_time_str, '%H:%M')
+    ist_timezone = pytz.timezone('Asia/Kolkata')
+    today_ist = datetime.now(ist_timezone).date()
+    ist_time = datetime.combine(today_ist, utc_time.time()).astimezone(ist_timezone)
+    formatted_ist_time = ist_time.strftime('%Y-%m-%d %H:%M:%S IST')
+    return formatted_ist_time
+
+# Function to get the schedule for a specific day
+def get_schedule_for_day(day):
+    try:
+        target_day_index = day
+        target_day_date = get_next_occurrence_of_day(target_day_index)
+
+        response_data = get_subsplease_schedule(target_day_date)
+
+        if response_data:
+            schedule = response_data.get('schedule', [])
+            response_msg = f"{get_day_name(target_day_index)}'s currently airing animes:\n"
+
+            for entry in schedule:
+                anime_title = entry.get('title', '')
+                airing_time_utc = entry.get('time', '')
+                aired_status = entry.get('aired', False)
+
+                airing_time_ist = convert_utc_to_ist(airing_time_utc)
+
+                # Add a bullet point and checkmark/cross based on aired status
+                status_icon = '✅' if aired_status else '❌'
+
+                response_msg += f"• {anime_title} - {airing_time_ist} | {status_icon}\n"
+
+            return response_msg
+        else:
+            return "Error fetching SubsPlease schedule. Please try again later."
+    except Exception as e:
+        print(f"Error in get_schedule_for_day: {e}")
+        return "An error occurred. Please try again later."
+
+# Function to get the date of the next occurrence of a specified day
+def get_next_occurrence_of_day(day):
+    today = datetime.utcnow()
+    days_until_target_day = (today.weekday() - day) % 7
+    next_occurrence = today + timedelta(days=(7 - days_until_target_day))
+    return next_occurrence.strftime('%Y-%m-%d')
+
+# Function to get the day name from the day index
+def get_day_name(day_index):
+    return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day_index - 1]
+
+# Function to print a tick or cross based on the aired status
+def print_status(aired_status):
+    return '✅' if aired_status else '❌'
+
+
+# Define the Pyrogram command handler for the /subsplease command
+@app.on_message(filters.command("subsplease"))
+async def subsplease_handler(client: app, message):
+    try:
+        # Define the button rows for each day
+        button_rows = [
+            [
+                InlineKeyboardButton(get_day_name(day_index), callback_data=f"sche_{day_index}")
+                for day_index in range(1, 8)  # Seven buttons in a row
+            ]
+        ]
+
+        # Build the response message
+        response_msg = "Today's currently airing animes:\n"
+
+        # Get the SubsPlease schedule for today
+        today_date = datetime.now().strftime('%Y-%m-%d')
+        today_schedule = get_subsplease_schedule(today_date)
+
+        if today_schedule:
+            today_animes = today_schedule.get('schedule', [])
+
+            for today_entry in today_animes:
+                anime_title_today = today_entry.get('title', '')
+                airing_time_utc_today = today_entry.get('time', '')
+                aired_status_today = today_entry.get('aired', False)
+
+                airing_time_ist_today = convert_utc_to_ist(airing_time_utc_today)
+
+                # Add a bullet point for each anime
+                status_icon_today = print_status(aired_status_today)
+                response_msg += f"• {anime_title_today} - {airing_time_ist_today} | {status_icon_today}\n"
+        else:
+            response_msg += "Error fetching currently airing animes. Please try again later.\n"
+
+        response_msg += "\nPress a button to view the schedule for a specific day."
+
+        # Send the initial response message with inline buttons
+        await message.reply_text(response_msg, reply_markup=InlineKeyboardMarkup(button_rows))
+    except Exception as e:
+        print(f"Error in subsplease_handler: {e}")
+
+# Define the Pyrogram callback handler for button clicks
+@app.on_callback_query(filters.regex(r"^sche_"))
+async def button_click_handler(client: app, callback_query):
+    print("buttons taking updatee atleast ig")
+    try:
+        # Extract the day index from the button data
+        day_index = int(callback_query.data.split('_')[1])
+
+        # Get the schedule for the specified day and edit the response
+        schedule_for_day = get_schedule_for_day(day_index)
+        await callback_query.message.edit_text(schedule_for_day)
+    except Exception as e:
+        print(f"Error in button_click_handler: {e}")
